@@ -26,11 +26,19 @@ class PixelDiagnosticTests(unittest.TestCase):
     def test_acquisition_fixes_exact_product_ids_and_row_provenance(self):
         import acquire_landsat_b10_samples_2025 as acquisition
         error_type = acquisition.DiagnosticError
-        selected = [
-            {"collection": module.COLLECTIONS["LC08"], "candidate_row_number": "4", "candidate_id": "m_348", "year": "2025", "relationship": "inside", "asset_id": "LANDSAT/LC08/C02/T2/LC08_032205_20250107", "footprint_product_id": "LC08_L1GT_032205_20250107_20250121_02_T2"},
-            {"collection": module.COLLECTIONS["LC09"], "candidate_row_number": "4", "candidate_id": "m_348", "year": "2025", "relationship": "inside", "asset_id": "LANDSAT/LC09/C02/T2/LC09_032205_20250216", "footprint_product_id": "LC09_L1GT_032205_20250216_20250216_02_T2"},
-        ]
+        selected = module.select_pairs()
         acquisition.validate_selection(selected)
+        self.assertEqual(
+            {row["footprint_product_id"] for row in selected},
+            set(acquisition.EXPECTED_PRODUCTS.values()),
+        )
+        self.assertEqual(
+            {row["asset_id"] for row in selected},
+            set(acquisition.EXPECTED_ASSETS.values()),
+        )
+        changed_product = dict(selected[1], footprint_product_id="LC09_L1GT_032205_20250216_20250216_02_T2")
+        with self.assertRaisesRegex(error_type, "exact product IDs"):
+            acquisition.validate_selection([selected[0], changed_product])
         selected[1]["candidate_row_number"] = "6"
         with self.assertRaisesRegex(error_type, "candidate row 4"):
             acquisition.validate_selection(selected)
