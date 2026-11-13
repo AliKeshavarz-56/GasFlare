@@ -1,7 +1,6 @@
 """Offline planning and bounded pixel diagnostic for two saved Landsat assets.
 
-The live request is deliberately disabled until the Level-2 asset semantics are
-verified against the official Earth Engine catalog and authenticated runtime.
+The selected T2 assets are Tier-2 Level-1 products, not Level-2 products.
 """
 
 import argparse
@@ -27,6 +26,7 @@ SATELLITES = ("LC08", "LC09")
 WINDOW = 9
 REQUIRED_BANDS = ("B10", "QA_PIXEL", "QA_RADSAT")
 QA_PIXEL_BITS = {"fill": 0, "dilated_cloud": 1, "cirrus": 2, "cloud": 3, "cloud_shadow": 4, "snow": 5}
+COLLECTIONS = {"LC08": "LANDSAT/LC08/C02/T2", "LC09": "LANDSAT/LC09/C02/T2"}
 
 
 class DiagnosticError(ValueError):
@@ -52,6 +52,12 @@ def select_pairs(pair_path=PAIR_TABLE, candidate_path=CANDIDATES):
         selected.append(min(eligible, key=lambda row: (int(row["candidate_row_number"]), row["asset_id"], row["footprint_product_id"])))
     if len(selected) != 2 or {row["collection"].split("/")[1] for row in selected} != set(SATELLITES):
         raise DiagnosticError("selection did not yield exactly one pair per satellite")
+    for row in selected:
+        satellite = row["collection"].split("/")[1]
+        if row["collection"] != COLLECTIONS[satellite]:
+            raise DiagnosticError(f"unexpected collection for {satellite}: {row['collection']}")
+        if "_L1" not in row["footprint_product_id"] or not row["footprint_product_id"].endswith("_02_T2"):
+            raise DiagnosticError("selected asset is not the expected Collection 2 Tier 2 Level-1 product")
     return selected
 
 
@@ -92,59 +98,24 @@ def classify_request(error, valid_cells):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline-plan", action="store_true", help="validate hashes and print restricted sample plan")
-    parser.add_argument("--live", action="store_true", help="perform bounded Earth Engine request (disabled until semantics are verified)")
+    parser.add_argument("--live", action="store_true", help="perform bounded Earth Engine request (requires authenticated asset inspection)")
     args = parser.parse_args(argv)
     if args.live:
-        raise DiagnosticError("live pixel request blocked: Earth Engine Level-2 catalog semantics were unavailable for verification")
+        raise DiagnosticError("live pixel request blocked: asset band/projection inspection is not implemented; no request sent")
     if not args.offline_plan:
         parser.error("choose --offline-plan or --live")
-    for label, path in INPUTS.items():
-        if not path.is_file():
-            raise DiagnosticError(f"missing input: {label}")
-    selected = select_pairs()
-    manifest = json.loads(INPUTS["manifest"].read_text(encoding="utf-8"))
-    if manifest.get("run_id") != RUN.name:
-        raise DiagnosticError("accepted metadata run ID mismatch")
-    hashes = {label: sha256(path) for label, path in INPUTS.items()}
-    result_path = ROOT / "data" / "derived" / "worldbank" / "landsat_night_pixel_diagnostic_2025_restricted.json"
-    output = {
-        "status": "interpretation_unresolved",
-        "live_requests": 0,
-        "window_cells": WINDOW * WINDOW,
-        "inputs_sha256": hashes,
-        "python_version": __import__("platform").python_version(),
-        "dependencies": {"earthengine-api": __import__("importlib.metadata", fromlist=["version"]).version("earthengine-api"), "numpy": __import__("importlib.metadata", fromlist=["version"]).version("numpy")},
-        "selected_pairs_restricted": [{
-            "satellite": row["collection"].split("/")[1],
-            "candidate_row_number": int(row["candidate_row_number"]),
-            "candidate_id": row["candidate_id"],
-            "longitude": float(row["longitude"]),
-            "latitude": float(row["latitude"]),
-            "asset_id": row["asset_id"],
-            "product_id": row["footprint_product_id"],
-            "result": "interpretation_unresolved",
-            "live_request": "not_attempted",
-            "available_bands": None,
-            "sampling_grid": "9x9 B10-native grid not retrieved",
-            "total_cells": WINDOW * WINDOW,
-            "valid_cells": None,
-            "masked_cells": None,
-            "qa_summary": None,
-            "saturation_status": "unresolved",
-            "stored_b10_summary": None,
-        } for row in selected],
-    }
-    if result_path.exists():
-        existing = json.loads(result_path.read_text(encoding="utf-8"))
-        if existing.get("inputs_sha256") != hashes or len(existing.get("selected_pairs_restricted", [])) != 2:
-            raise DiagnosticError("restricted local output exists but does not match this input set")
-        result_path.write_text(json.dumps(output, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps(output, sort_keys=True))
+    if args.offline_plan:
+        for label, path in INPUTS.items():
+            if not path.is_file():
+                raise DiagnosticError(f"missing input: {label}")
+        selected = select_pairs()
+        manifest = json.loads(INPUTS["manifest"].read_text(encoding="utf-8"))
+        if manifest.get("run_id") != RUN.name:
+            raise DiagnosticError("accepted metadata run ID mismatch")
+        hashes = {label: sha256(path) for label, path in INPUTS.items()}
+        print("Offline plan only: selection and input hashes validated; no pixel request was made.")
+        print(json.dumps({"selected_pair_count": len(selected), "candidate_rows": [int(row["candidate_row_number"]) for row in selected], "input_sha256": hashes}, sort_keys=True))
         return 0
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(output, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(output, sort_keys=True))
-    return 0
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ class PixelDiagnosticTests(unittest.TestCase):
         self.assertEqual(len(selected), 2)
         self.assertEqual({row["collection"].split("/")[1] for row in selected}, {"LC08", "LC09"})
         self.assertEqual([int(row["candidate_row_number"]) for row in selected], [4, 4])
+        self.assertEqual({row["collection"] for row in selected}, set(module.COLLECTIONS.values()))
+        self.assertTrue(all("_L1" in row["footprint_product_id"] and row["footprint_product_id"].endswith("_02_T2") for row in selected))
         with open(module.ROOT / "data/derived/worldbank/landsat_night_pixel_diagnostic_2025_restricted.json", encoding="utf-8") as stream:
             report = __import__("json").load(stream)
         self.assertEqual(len(report["selected_pairs_restricted"]), 2)
@@ -49,6 +51,10 @@ class PixelDiagnosticTests(unittest.TestCase):
         self.assertEqual(module.classify_request("HTTP failure", 0), "request_error")
         self.assertEqual(module.classify_request("", 0), "no_valid_data")
         self.assertEqual(module.classify_request("", 12), "reviewable_data")
+
+    def test_live_mode_fails_closed_before_any_pixel_request(self):
+        with self.assertRaisesRegex(module.DiagnosticError, "no request sent"):
+            module.main(["--live"])
 
     def test_valid_stored_values_have_summary(self):
         arrays = {band: grid(0) for band in module.REQUIRED_BANDS}
