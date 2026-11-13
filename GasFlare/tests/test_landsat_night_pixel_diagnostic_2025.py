@@ -1,4 +1,7 @@
 import importlib.util
+import math
+import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -53,8 +56,63 @@ class PixelDiagnosticTests(unittest.TestCase):
         self.assertEqual(module.classify_request("", 12), "reviewable_data")
 
     def test_live_mode_fails_closed_before_any_pixel_request(self):
-        with self.assertRaisesRegex(module.DiagnosticError, "no request sent"):
-            module.main(["--live"])
+        calls = []
+        fake_ee = types.SimpleNamespace(Initialize=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("403 https://private.invalid/token=secret")), Image=lambda *_: calls.append("asset"))
+        previous = sys.modules.get("ee")
+        sys.modules["ee"] = fake_ee
+        try:
+            with self.assertRaisesRegex(module.DiagnosticError, "initialization failed") as caught:
+                module.main(["--live"])
+            self.assertEqual(calls, [])
+            self.assertNotIn("private.invalid", str(caught.exception))
+            self.assertNotIn("secret", str(caught.exception))
+        finally:
+            if previous is None:
+                del sys.modules["ee"]
+            else:
+                sys.modules["ee"] = previous
+
+    def asset_info(self):
+        transform = [30, 0, 500000, 0, -30, 4000000]
+        return {"bands": [{"id": band, "data_type": {"precision": "int"}, "crs": "EPSG:32639", "crs_transform": transform} for band in module.REQUIRED_BANDS], "properties": {}}
+
+    def test_asset_validation_rejects_missing_band(self):
+        info = self.asset_info()
+        info["bands"] = info["bands"][:-1]
+        with self.assertRaisesRegex(module.DiagnosticError, "missing required asset bands"):
+            module.validate_asset_info(info)
+
+    def test_asset_validation_rejects_invalid_or_inconsistent_projection(self):
+        info = self.asset_info()
+        info["bands"][0]["crs_transform"] = [0, 0, 0, 0, 0, 0]
+        with self.assertRaisesRegex(module.DiagnosticError, "affine transform is invalid"):
+            module.validate_asset_info(info)
+        info = self.asset_info()
+        info["bands"][1]["crs"] = "EPSG:4326"
+        with self.assertRaisesRegex(module.DiagnosticError, "do not share"):
+            module.validate_asset_info(info)
+
+    def test_missing_conversion_coefficients_remain_missing(self):
+        spec = module.validate_asset_info(self.asset_info())
+        self.assertTrue(all(value is None for value in spec["coefficients"].values()))
+
+    def test_error_scrubber_suppresses_html_body(self):
+        cleaned = module.clean_error(RuntimeError('HTTPError 403 https://private.invalid "Ok" <!DOCTYPE html> Authorization: Bearer secret'))
+        self.assertEqual(cleaned, "HTTP 403; response body suppressed")
+        self.assertNotIn("secret", cleaned)
+
+    def test_affine_centered_pixel_grid_is_nine_by_nine(self):
+        transform = [30, 0, 500000, 0, -30, 4000000]
+        grid_transform = module.pixel_grid(500015, 3999985, transform)
+        self.assertEqual(grid_transform, [30, 0, 499880, 0, -30, 4000120])
+        self.assertTrue(all(math.isfinite(value) for value in grid_transform))
+
+    def test_radsat_reports_dropped_not_b10_saturation(self):
+        arrays = {band: grid(0) for band in module.REQUIRED_BANDS}
+        arrays["QA_RADSAT"][0][0] = 1 << 9
+        result = module.inspect_window(arrays, masks())
+        self.assertEqual(result["qa_radsat_dropped_cells"], 1)
+        self.assertIsNone(result["qa_radsat_b10_saturated_cells"])
 
     def test_valid_stored_values_have_summary(self):
         arrays = {band: grid(0) for band in module.REQUIRED_BANDS}
