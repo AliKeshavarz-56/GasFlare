@@ -5,3 +5,4 @@
 /GasFlare/data/derived/worldbank/khuzestan_candidate_scene_*.csv
 /GasFlare/data/derived/landsat/private_b10_visualization*.json
 /GasFlare/data/derived/landsat/private_b10_visualization*.py
+/GasFlare/scripts/gee/restricted_landsat_b10_two_samples_2025.js
