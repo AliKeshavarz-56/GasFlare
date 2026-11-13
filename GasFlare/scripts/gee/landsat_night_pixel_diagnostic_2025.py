@@ -6,7 +6,6 @@ The selected T2 assets are Tier-2 Level-1 products, not Level-2 products.
 import argparse
 import csv
 import hashlib
-import io
 import json
 import math
 import re
@@ -127,10 +126,15 @@ def validate_asset_info(info):
     return {"projection": projection, "transform": values, "bands": bands, "coefficients": coefficients}
 
 
-def pixel_grid(longitude, latitude, transform):
+def pixel_grid(longitude, latitude, transform, projection):
+    try:
+        from pyproj import Transformer
+    except ImportError as exc:
+        raise DiagnosticError("pyproj is required to transform sample coordinates to the asset CRS") from exc
+    x, y = Transformer.from_crs("EPSG:4326", projection, always_xy=True).transform(longitude, latitude)
     a, b, c, d, e, f = transform
     determinant = a * e - b * d
-    dx, dy = longitude - c, latitude - f
+    dx, dy = x - c, y - f
     col = math.floor((e * dx - b * dy) / determinant)
     row = math.floor((-d * dx + a * dy) / determinant)
     return [a, b, c + a * (col - WINDOW // 2) + b * (row - WINDOW // 2),
@@ -161,7 +165,7 @@ def live_pair_diagnostics(selected, ee_api, numpy_api):
 
     results = []
     for row, spec in inspected:
-        grid = pixel_grid(float(row["longitude"]), float(row["latitude"]), spec["transform"])
+        grid = pixel_grid(float(row["longitude"]), float(row["latitude"]), spec["transform"], spec["projection"])
         image = ee_api.Image(row["asset_id"])
         expression = image.select(list(REQUIRED_BANDS)).addBands(
             image.select(list(REQUIRED_BANDS)).mask().rename(["mask_" + name for name in REQUIRED_BANDS])
@@ -172,7 +176,10 @@ def live_pair_diagnostics(selected, ee_api, numpy_api):
                 "scaleX": grid[0], "shearX": grid[1], "translateX": grid[2],
                 "shearY": grid[3], "scaleY": grid[4], "translateY": grid[5]}, "crsCode": spec["projection"]},
         })
-        pixels = numpy_api.load(io.BytesIO(payload))
+        # Earth Engine's NUMPY_NDARRAY converter already returns a structured ndarray.
+        pixels = payload
+        if getattr(getattr(pixels, "dtype", None), "names", None) is None:
+            raise DiagnosticError("pixel response is not a structured NumPy array")
         arrays, masks = {}, {}
         for name in REQUIRED_BANDS:
             if name not in pixels.dtype.names:

@@ -40,6 +40,24 @@ class PixelDiagnosticTests(unittest.TestCase):
         self.assertEqual((result["total_cells"], result["valid_cells"], result["masked_cells"]), (81, 0, 81))
         self.assertIsNone(result["stored_b10"])
 
+    def test_mixed_validity_uses_band_masks_not_values_or_qa_flags(self):
+        arrays = {band: grid(0) for band in module.REQUIRED_BANDS}
+        arrays["B10"] = grid(0)
+        band_masks = masks()
+        band_masks["B10"] = grid(False)
+        band_masks["B10"][0][0] = True
+        band_masks["QA_PIXEL"][0][1] = False
+        result = module.inspect_window(arrays, band_masks)
+        self.assertEqual((result["valid_cells"], result["masked_cells"]), (1, 80))
+        self.assertEqual(result["stored_b10"], {"count": 1, "min": 0, "max": 0, "mean": 0.0})
+        self.assertEqual(result["qa_pixel"], {name: 0 for name in module.QA_PIXEL_BITS})
+
+    def test_zero_qa_is_counted_as_clear_when_its_mask_is_valid(self):
+        arrays = {band: grid(0) for band in module.REQUIRED_BANDS}
+        result = module.inspect_window(arrays, masks())
+        self.assertEqual(result["valid_cells"], 81)
+        self.assertEqual(result["qa_pixel"], {name: 0 for name in module.QA_PIXEL_BITS})
+
     def test_missing_required_band_is_rejected(self):
         arrays = {band: grid(1) for band in module.REQUIRED_BANDS if band != "QA_RADSAT"}
         with self.assertRaisesRegex(module.DiagnosticError, "QA_RADSAT"):
@@ -102,8 +120,11 @@ class PixelDiagnosticTests(unittest.TestCase):
         self.assertNotIn("secret", cleaned)
 
     def test_affine_centered_pixel_grid_is_nine_by_nine(self):
+        import pyproj
+
+        longitude, latitude = pyproj.Transformer.from_crs("EPSG:32639", "EPSG:4326", always_xy=True).transform(500015, 3999985)
         transform = [30, 0, 500000, 0, -30, 4000000]
-        grid_transform = module.pixel_grid(500015, 3999985, transform)
+        grid_transform = module.pixel_grid(longitude, latitude, transform, "EPSG:32639")
         self.assertEqual(grid_transform, [30, 0, 499880, 0, -30, 4000120])
         self.assertTrue(all(math.isfinite(value) for value in grid_transform))
 
@@ -119,6 +140,81 @@ class PixelDiagnosticTests(unittest.TestCase):
         arrays["B10"] = [[float(y * 9 + x) for x in range(9)] for y in range(9)]
         result = module.inspect_window(arrays, masks())
         self.assertEqual(result["stored_b10"], {"count": 81, "min": 0.0, "max": 80.0, "mean": 40.0})
+
+    def test_live_pixel_response_uses_predecoded_structured_array(self):
+        import numpy as np
+        import pyproj
+
+        longitude, latitude = pyproj.Transformer.from_crs("EPSG:32639", "EPSG:4326", always_xy=True).transform(500015, 3999985)
+        selected = [{"asset_id": "asset", "longitude": longitude, "latitude": latitude, "footprint_product_id": "PRODUCT_L1_02_T2"}]
+        transform = [30, 0, 500000, 0, -30, 4000000]
+        spec = {"transform": transform, "projection": "EPSG:32639", "coefficients": {}}
+        pixel_dtype = [(band, "i4") for band in module.REQUIRED_BANDS + tuple("mask_" + band for band in module.REQUIRED_BANDS)]
+        pixels = np.zeros((9, 9), dtype=pixel_dtype)
+
+        class FakeImage:
+            def getInfo(self):
+                return {"properties": {"LANDSAT_PRODUCT_ID": "PRODUCT_L1_02_T2"}}
+
+            def select(self, *_):
+                return self
+
+            def addBands(self, *_):
+                return self
+
+            def mask(self):
+                return self
+
+            def rename(self, *_):
+                return self
+
+        fake_ee = types.SimpleNamespace(
+            Image=lambda *_: FakeImage(),
+            data=types.SimpleNamespace(computePixels=lambda *_: pixels),
+        )
+        original_validate = module.validate_asset_info
+        module.validate_asset_info = lambda _: spec
+        try:
+            result = module.live_pair_diagnostics(selected, fake_ee, np)
+        finally:
+            module.validate_asset_info = original_validate
+        self.assertEqual(result[0]["total_cells"], 81)
+
+    def test_live_pixel_response_rejects_non_structured_data_offline(self):
+        import pyproj
+
+        longitude, latitude = pyproj.Transformer.from_crs("EPSG:32639", "EPSG:4326", always_xy=True).transform(500015, 3999985)
+        selected = [{"asset_id": "asset", "longitude": longitude, "latitude": latitude, "footprint_product_id": "PRODUCT_L1_02_T2"}]
+        transform = [30, 0, 500000, 0, -30, 4000000]
+        spec = {"transform": transform, "projection": "EPSG:32639", "coefficients": {}}
+
+        class FakeImage:
+            def getInfo(self):
+                return {"properties": {"LANDSAT_PRODUCT_ID": "PRODUCT_L1_02_T2"}}
+
+            def select(self, *_):
+                return self
+
+            def addBands(self, *_):
+                return self
+
+            def mask(self):
+                return self
+
+            def rename(self, *_):
+                return self
+
+        fake_ee = types.SimpleNamespace(
+            Image=lambda *_: FakeImage(),
+            data=types.SimpleNamespace(computePixels=lambda *_: b"not a decoded array"),
+        )
+        original_validate = module.validate_asset_info
+        module.validate_asset_info = lambda _: spec
+        try:
+            with self.assertRaisesRegex(module.DiagnosticError, "not a structured NumPy array"):
+                module.live_pair_diagnostics(selected, fake_ee, object())
+        finally:
+            module.validate_asset_info = original_validate
 
 
 if __name__ == "__main__":
