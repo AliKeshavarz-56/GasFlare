@@ -48,6 +48,43 @@ request used Python's standard URL opener and inherited its normal environment
 proxy handling; no override was added. Its result is not an authenticated
 Earth Engine access test.
 
+## Additional user-reported evidence
+
+The following observations were supplied by the user; they were not
+independently reproduced or tested by the author of this report. The observation
+date was not provided.
+
+- In a direct Windows PowerShell run using
+  `C:\Users\ali\miniforge3\python.exe`, Python `3.14.7`, and
+  `earthengine-api` `1.7.43`, calling `ee.Initialize()` without an explicit
+  project failed with `HttpError`, HTTP 403.
+- A subsequent call with the explicit project
+  `ee.Initialize(project='indigo-bloom-501712-p0')` also failed. The supplied
+  traceback locates the failure along `Initialize` → `data.initialize` →
+  `_install_cloud_api_resource` → `build_cloud_resource` → `discovery.build` →
+  `_retrieve_discovery_doc` → `HttpError 403`.
+- The URL recorded in that traceback was
+  `https://earthengine.googleapis.com/$discovery/rest?version=v1&prettyPrint=false`.
+  The response body was an HTML 403 page containing: `Your client does not have
+  permission to get URL /$discovery/rest from this server.` A `Content-Type`
+  header was not recorded in this new observation; the body being HTML must not
+  be treated as a measured header value.
+- The user opened the same URL in a browser on the same computer and observed
+  the same 403 message. Whether the browser and Python used the same proxy or
+  outbound route was not checked. This shows the issue was not observed only in
+  Python, but does not establish a shared network path or root cause.
+- An intermediate attempt did not run Python because the command text and
+  executable path were incomplete. It is not a connection attempt and provides
+  no Earth Engine evidence.
+
+These user-reported observations show that the direct run failed while
+retrieving the discovery document, and that specifying the project did not
+resolve the failure in that test. A 403 for the same URL was also observed in
+the browser. The root cause remains undetermined. The historical agent failure's
+host and path remain unknown; the URL above must not be retroactively attributed
+to that historical failure. No conclusion about asset permissions, pixel
+access, or scientific image quality follows from these observations.
+
 ## Assessment and minimum corrective action
 
 There is no source-level difference in explicit project or credentials
