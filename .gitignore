@@ -1,1 +1,7 @@
-/GasFlare/data/derived/landsat/restricted_b10_sample*
+/GasFlare/data/derived/landsat/restricted_b10_*
+/GasFlare/data/derived/worldbank/khuzestan_flare_candidates_2025.csv
+/GasFlare/data/derived/worldbank/iran_2025_boundary_classification.csv
+/GasFlare/data/derived/worldbank/landsat_night_pixel_diagnostic_2025_restricted.json
+/GasFlare/data/derived/worldbank/khuzestan_candidate_scene_*.csv
+/GasFlare/data/derived/landsat/private_b10_visualization*.json
+/GasFlare/data/derived/landsat/private_b10_visualization*.py

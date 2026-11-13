@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts" / "gee"))
 SCRIPT = ROOT / "scripts" / "gee" / "landsat_night_pixel_diagnostic_2025.py"
 SPEC = importlib.util.spec_from_file_location("landsat_night_pixel_diagnostic", SCRIPT)
 module = importlib.util.module_from_spec(SPEC)
@@ -22,6 +23,27 @@ def masks(value=True):
 
 
 class PixelDiagnosticTests(unittest.TestCase):
+    def test_acquisition_fixes_exact_product_ids_and_row_provenance(self):
+        import acquire_landsat_b10_samples_2025 as acquisition
+        error_type = acquisition.DiagnosticError
+        selected = [
+            {"collection": module.COLLECTIONS["LC08"], "candidate_row_number": "4", "candidate_id": "m_348", "year": "2025", "relationship": "inside", "asset_id": "LANDSAT/LC08/C02/T2/LC08_032205_20250107", "footprint_product_id": "LC08_L1GT_032205_20250107_20250121_02_T2"},
+            {"collection": module.COLLECTIONS["LC09"], "candidate_row_number": "4", "candidate_id": "m_348", "year": "2025", "relationship": "inside", "asset_id": "LANDSAT/LC09/C02/T2/LC09_032205_20250216", "footprint_product_id": "LC09_L1GT_032205_20250216_20250216_02_T2"},
+        ]
+        acquisition.validate_selection(selected)
+        selected[1]["candidate_row_number"] = "6"
+        with self.assertRaisesRegex(error_type, "candidate row 4"):
+            acquisition.validate_selection(selected)
+        selected[1]["candidate_row_number"] = "4"
+        selected[1]["asset_id"] = "LANDSAT/LC09/C02/T2/OTHER"
+        with self.assertRaisesRegex(error_type, "exact assets"):
+            acquisition.validate_selection(selected)
+
+    def test_acquisition_output_preflight_refuses_existing_files(self):
+        import acquire_landsat_b10_samples_2025 as acquisition
+        with self.assertRaisesRegex(acquisition.DiagnosticError, "overwrite"):
+            acquisition.require_absent([Path(__file__)])
+
     def test_b10_preprocessing_uses_formula_units_and_preserves_mask(self):
         coefficients = {
             "RADIANCE_MULT_BAND_10": 0.01,

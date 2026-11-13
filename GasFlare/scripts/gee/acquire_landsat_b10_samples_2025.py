@@ -19,10 +19,48 @@ OUTPUT = Path(__file__).resolve().parents[2] / "data" / "derived" / "landsat" / 
 PROJECT = "indigo-bloom-501712-p0"
 BANDS = ("B10", "QA_PIXEL", "QA_RADSAT")
 COEFFICIENTS = ("RADIANCE_MULT_BAND_10", "RADIANCE_ADD_BAND_10", "K1_CONSTANT_BAND_10", "K2_CONSTANT_BAND_10")
+EXPECTED_PRODUCTS = {
+    "LC08": "LC08_L1GT_032205_20250107_20250121_02_T2",
+    "LC09": "LC09_L1GT_032205_20250216_20250216_02_T2",
+}
+EXPECTED_ASSETS = {
+    "LC08": "LANDSAT/LC08/C02/T2/LC08_032205_20250107",
+    "LC09": "LANDSAT/LC09/C02/T2/LC09_032205_20250216",
+}
+DERIVATIVES = (OUTPUT.with_name("restricted_b10_sample_1.png"), OUTPUT.with_name("restricted_b10_sample_2.png"), OUTPUT.with_name("restricted_b10_sample_statistics.json"))
+
+
+def require_absent(paths):
+    existing = [str(path) for path in paths if path.exists()]
+    if existing:
+        raise DiagnosticError("refusing to overwrite existing output: " + ", ".join(existing))
+
+
+def validate_selection(selected):
+    if len(selected) != 2:
+        raise DiagnosticError("expected exactly two selected candidate pairs")
+    seen = set()
+    for row in selected:
+        satellite = row["collection"].split("/")[1]
+        if satellite not in EXPECTED_PRODUCTS or satellite in seen or row["candidate_row_number"] != "4":
+            raise DiagnosticError("selection is not the approved candidate row 4")
+        seen.add(satellite)
+        if row.get("candidate_id") != "m_348" or row.get("year") != "2025":
+            raise DiagnosticError("selection provenance does not match the approved candidate row")
+        if row.get("relationship") != "inside":
+            raise DiagnosticError("selected product is not an inside candidate intersection")
+        if row["footprint_product_id"] != EXPECTED_PRODUCTS[satellite]:
+            raise DiagnosticError("selection does not match the approved exact product IDs")
+        if row.get("asset_id") != EXPECTED_ASSETS[satellite] or row.get("collection") != f"LANDSAT/{satellite}/C02/T2":
+            raise DiagnosticError("selection does not match the approved exact assets")
+    if seen != set(EXPECTED_PRODUCTS):
+        raise DiagnosticError("selection must contain one approved product per satellite")
 
 
 def main():
     selected = select_pairs()
+    validate_selection(selected)
+    require_absent((OUTPUT, *DERIVATIVES))
     ee.Initialize(project=PROJECT)
     archive = {}
     manifest = {"purpose": "two exact 9x9 B10 samples", "samples": []}
@@ -31,7 +69,7 @@ def main():
         info = asset.getInfo()
         spec = validate_asset_info(info)
         props = info.get("properties", {})
-        if props.get("LANDSAT_PRODUCT_ID") != row["footprint_product_id"]:
+        if props.get("LANDSAT_PRODUCT_ID") != EXPECTED_PRODUCTS[row["collection"].split("/")[1]]:
             raise DiagnosticError("asset product ID does not match saved selected pair")
         coefficients = {key: props.get(key) for key in COEFFICIENTS}
         if any(value is None for value in coefficients.values()):
@@ -58,8 +96,8 @@ def main():
             "coefficients": coefficients, "coefficient_source": "exact asset properties",
             "window": [9, 9], "band_masks_saved": True,
         })
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     archive["manifest_json"] = np.array(json.dumps(manifest, sort_keys=True))
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(OUTPUT, **archive)
     print(f"Saved two restricted 9x9 samples to {OUTPUT}")
 
@@ -68,14 +106,28 @@ def process_saved():
     """Offline conversion and per-sample PNG/JSON outputs from the saved NPZ."""
     import matplotlib.pyplot as plt
 
+    require_absent(DERIVATIVES)
     if not OUTPUT.is_file():
         raise DiagnosticError(f"missing local sample archive: {OUTPUT}")
     with np.load(OUTPUT, allow_pickle=False) as saved:
         manifest = json.loads(str(saved["manifest_json"].item()))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("samples"), list) or len(manifest["samples"]) != 2:
+            raise DiagnosticError("saved archive manifest must contain exactly two samples")
+        expected_fields = {f"{index}_{kind}_{band}" for index in range(2) for kind in ("value", "mask") for band in BANDS}
+        if set(saved.files) != expected_fields | {"manifest_json"}:
+            raise DiagnosticError("saved archive fields do not match the expected two 9x9 samples")
         result = {"samples": []}
         figure_paths = []
         for index, sample in enumerate(manifest["samples"]):
+            if not isinstance(sample, dict):
+                raise DiagnosticError("saved archive sample manifest is invalid")
+            if sample.get("product_id") != EXPECTED_PRODUCTS[("LC08", "LC09")[index]]:
+                raise DiagnosticError("saved archive product IDs do not match the approved selection")
             dn = saved[f"{index}_value_B10"]
+            if dn.shape != (9, 9) or any(saved[f"{index}_mask_{name}"].shape != (9, 9) for name in BANDS):
+                raise DiagnosticError("saved archive arrays must be exactly 9x9")
+            if any(saved[f"{index}_value_{name}"].shape != (9, 9) for name in BANDS):
+                raise DiagnosticError("saved archive arrays must be exactly 9x9")
             masks = {name: saved[f"{index}_mask_{name}"] != 0 for name in BANDS}
             valid = masks["B10"] & masks["QA_PIXEL"] & masks["QA_RADSAT"]
             converted = preprocess_b10(dn.tolist(), valid.tolist(), sample["coefficients"])

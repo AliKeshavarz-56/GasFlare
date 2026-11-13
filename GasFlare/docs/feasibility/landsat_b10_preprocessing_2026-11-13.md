@@ -25,7 +25,7 @@ The preprocessing function refuses missing, non-finite, or invalid coefficients 
 
 ## Bounded Acquisition After User Review
 
-The exact command, to be run only after user review/authorization, is:
+The exact command from the actual repository root (`D:\UN\Term1\project\GasFlare`), to be run only after user review/authorization, is:
 
 ```powershell
 python GasFlare/scripts/gee/acquire_landsat_b10_samples_2025.py
@@ -35,6 +35,14 @@ It uses the existing deterministic selected pair and coordinates, inspects each 
 
 After that local acquisition, the saved samples can be passed through the offline `preprocess_b10()` and `matrix_summary()` functions; plots must use fixed, labeled units/scales, preserve masked cells, and clearly label B10 DN versus brightness temperature (K). Those per-sample tables and 9x9 visualizations remain ungenerated until the real pixel arrays are available.
 
+## Earth Engine Code Editor Template
+
+`GasFlare/scripts/gee/landsat_b10_two_samples_template.js` is a tracked, coordinate-free visualization template for the two exact samples selected by `select_pairs()`: `LC08_L1GT_032205_20250107_20250121_02_T2` and `LC09_L1GT_032205_20250216_20250216_02_T2`. These differ from the LC09 product reported in an earlier diagnostic summary; the latter is not the deterministic selection made by the current selector. The private `PRIVATE_CONFIG.samples` must be supplied separately and locally with exactly two entries in that order, each providing `label`, `productId`, `assetId`, `coordinates` as `[longitude, latitude]`, and `footprint` as an `ee.Geometry`. The template constructs the point from the coordinates. Do not put coordinates, asset IDs, or derived private configuration into tracked files. The Code Editor cannot read a local config file; use a separate private editor buffer/configuration and paste or insert it locally. No network request was made and the template was not run.
+
+The script reads each exact asset's B10 projection/affine transform, projects the point to that CRS, applies the full inverse affine transform and `floor` to select its containing pixel, and sets the 9x9 origin four rows and columns before it. This matches `pixel_grid()` and the Python `computePixels` window convention, including non-zero shear terms. It checks that B10, QA_PIXEL, and QA_RADSAT share that grid. The displayed valid intersection is the conjunction of the three native per-band masks; raw QA bits are separate, toggleable interpretive layers and do not impose extra masking. Radiance and brightness temperature use exact image properties and the Python equations `ML * DN + AL` and `K2 / ln(1 + K1 / radiance)`; non-positive radiance is masked. Layer display ranges only control visualization, not pixel values. Layers can be toggled independently; exact product time and coefficients are printed in the Console.
+
+This is an interactive visualization, not an export or saved 9x9 numerical archive. Do not infer per-pixel B10 saturation from QA_RADSAT: its bit 9 is dropped-pixel status, and Landsat 8/9 Collection 2 QA_RADSAT has no B10 saturation bit. `SATURATION_BAND_10`, when present, is scene-level metadata. The output is sensor-equivalent brightness temperature, not land-surface or flare temperature; windows do not establish background suitability or flare detection. Coordinates and asset identifiers remain sensitive local configuration and must not be published with screenshots or scripts.
+
 For a separate offline-only processing run after acquisition, use:
 
 ```powershell
@@ -42,3 +50,11 @@ python GasFlare/scripts/gee/acquire_landsat_b10_samples_2025.py --process-saved
 ```
 
 That command reads only the existing local archive (it does not initialize Earth Engine) and writes the restricted statistics JSON and one labeled 9x9 PNG per sample beside the archive. Files are covered by the same local-artifact ignore rule.
+
+## Local Metadata: Daytime Candidate Status
+
+The existing Tier 1 inventory is province-wide aggregate metadata and representative examples, not a complete same-point daytime scene match. It reports 178 LC08 and 176 LC09 Tier 1 images with positive scene-center sun elevation, but does not provide a daytime product ID, timestamp, processing level, point-specific footprint test, valid mask, or QA evidence for these two samples. The saved point intersection table covers the selected night-scene footprints only. Therefore a suitable daytime image cannot be selected or assumed from the metadata currently available; no new query or sample expansion was performed.
+
+## Acquisition Guardrails
+
+The acquisition validates row-4 provenance, candidate ID/year, inside-footprint relation, and both exact asset/product IDs before initializing Earth Engine. It requests one 9x9 window from each asset and stores B10, QA_PIXEL, QA_RADSAT, per-band masks, CRS, and affine transforms. It refuses to overwrite archive or derivative outputs. World Bank candidate/intersection files, restricted sample artifacts, and private visualization configuration are ignored at the repository root. QA bit layers remain interpretive: native mask validity is not a cloud-free/quality determination.
