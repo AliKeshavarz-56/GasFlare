@@ -22,6 +22,54 @@ def masks(value=True):
 
 
 class PixelDiagnosticTests(unittest.TestCase):
+    def test_b10_preprocessing_uses_formula_units_and_preserves_mask(self):
+        coefficients = {
+            "RADIANCE_MULT_BAND_10": 0.01,
+            "RADIANCE_ADD_BAND_10": 0.1,
+            "K1_CONSTANT_BAND_10": 774.8853,
+            "K2_CONSTANT_BAND_10": 1321.0789,
+        }
+        dn = grid(100)
+        valid_mask = grid(True)
+        valid_mask[0][0] = False
+        result = module.preprocess_b10(dn, valid_mask, coefficients)
+        expected_radiance = 1.1
+        expected_temperature = 1321.0789 / math.log(1 + 774.8853 / expected_radiance)
+        self.assertIsNone(result["radiance"][0][0])
+        self.assertIsNone(result["brightness_temperature_k"][0][0])
+        self.assertFalse(result["valid_mask"][0][0])
+        self.assertAlmostEqual(result["radiance"][0][1], expected_radiance)
+        self.assertAlmostEqual(result["brightness_temperature_k"][0][1], expected_temperature)
+        summary = module.matrix_summary(result["brightness_temperature_k"], result["valid_mask"], "K")
+        self.assertEqual(summary["unit"], "K")
+        self.assertEqual(summary["count"], 80)
+
+    def test_b10_preprocessing_rejects_missing_coefficients(self):
+        with self.assertRaisesRegex(module.DiagnosticError, "missing exact-product"):
+            module.preprocess_b10(grid(1), grid(True), {})
+
+    def test_b10_preprocessing_rejects_nonpositive_radiance(self):
+        coefficients = {
+            "RADIANCE_MULT_BAND_10": 0.001,
+            "RADIANCE_ADD_BAND_10": -1,
+            "K1_CONSTANT_BAND_10": 774.8853,
+            "K2_CONSTANT_BAND_10": 1321.0789,
+        }
+        with self.assertRaisesRegex(module.DiagnosticError, "non-positive"):
+            module.preprocess_b10(grid(1), grid(True), coefficients)
+
+    def test_b10_preprocessing_rejects_nonfinite_valid_dn(self):
+        coefficients = {
+            "RADIANCE_MULT_BAND_10": 0.01,
+            "RADIANCE_ADD_BAND_10": 0.1,
+            "K1_CONSTANT_BAND_10": 774.8853,
+            "K2_CONSTANT_BAND_10": 1321.0789,
+        }
+        dn = grid(1)
+        dn[0][0] = float("nan")
+        with self.assertRaisesRegex(module.DiagnosticError, "DN must be finite"):
+            module.preprocess_b10(dn, grid(True), coefficients)
+
     def test_deterministic_selection_chooses_two_satellites(self):
         selected = module.select_pairs()
         self.assertEqual(len(selected), 2)

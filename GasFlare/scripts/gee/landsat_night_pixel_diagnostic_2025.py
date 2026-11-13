@@ -30,6 +30,10 @@ REQUIRED_BANDS = ("B10", "QA_PIXEL", "QA_RADSAT")
 QA_PIXEL_BITS = {"fill": 0, "dilated_cloud": 1, "cirrus": 2, "cloud": 3, "cloud_shadow": 4, "snow": 5}
 QA_RADSAT_DROPPED_BIT = 9
 COLLECTIONS = {"LC08": "LANDSAT/LC08/C02/T2", "LC09": "LANDSAT/LC09/C02/T2"}
+RADIOMETRIC_COEFFICIENTS = (
+    "RADIANCE_MULT_BAND_10", "RADIANCE_ADD_BAND_10",
+    "K1_CONSTANT_BAND_10", "K2_CONSTANT_BAND_10",
+)
 
 
 class DiagnosticError(ValueError):
@@ -91,6 +95,57 @@ def inspect_window(arrays, band_masks):
         "qa_radsat_b10_saturated_cells": None,
         "stored_b10": ({"count": len(valid), "min": min(valid), "max": max(valid), "mean": sum(valid) / len(valid)} if valid else None),
     }
+
+
+def preprocess_b10(dn, band_masks, coefficients):
+    """Convert a masked B10 matrix using exact-product coefficients only."""
+    missing = [key for key in RADIOMETRIC_COEFFICIENTS if key not in coefficients or coefficients[key] is None]
+    if missing:
+        raise DiagnosticError("missing exact-product B10 coefficients: " + ", ".join(missing))
+    try:
+        coeff = {key: float(coefficients[key]) for key in RADIOMETRIC_COEFFICIENTS}
+    except (TypeError, ValueError):
+        raise DiagnosticError("B10 coefficients must be numeric")
+    if not all(math.isfinite(value) for value in coeff.values()):
+        raise DiagnosticError("B10 coefficients must be finite")
+    if coeff["RADIANCE_MULT_BAND_10"] <= 0 or coeff["K1_CONSTANT_BAND_10"] <= 0 or coeff["K2_CONSTANT_BAND_10"] <= 0:
+        raise DiagnosticError("B10 multiplicative and Planck coefficients must be positive")
+    if len(dn) != WINDOW or any(len(row) != WINDOW for row in dn) or len(band_masks) != WINDOW or any(len(row) != WINDOW for row in band_masks):
+        raise DiagnosticError("B10 values and mask must be exactly 9x9")
+
+    radiance = [[None] * WINDOW for _ in range(WINDOW)]
+    temperature = [[None] * WINDOW for _ in range(WINDOW)]
+    valid = [[False] * WINDOW for _ in range(WINDOW)]
+    ml = coeff["RADIANCE_MULT_BAND_10"]
+    al = coeff["RADIANCE_ADD_BAND_10"]
+    k1 = coeff["K1_CONSTANT_BAND_10"]
+    k2 = coeff["K2_CONSTANT_BAND_10"]
+    for y in range(WINDOW):
+        for x in range(WINDOW):
+            if not band_masks[y][x]:
+                continue
+            try:
+                value = float(dn[y][x])
+            except (TypeError, ValueError):
+                raise DiagnosticError("valid B10 DN must be numeric")
+            if not math.isfinite(value):
+                raise DiagnosticError("valid B10 DN must be finite")
+            rad = ml * value + al
+            if not math.isfinite(rad) or rad <= 0:
+                raise DiagnosticError("valid B10 sample produced non-positive or non-finite radiance")
+            bt = k2 / math.log1p(k1 / rad)
+            if not math.isfinite(bt):
+                raise DiagnosticError("valid B10 sample produced non-finite brightness temperature")
+            radiance[y][x] = rad
+            temperature[y][x] = bt
+            valid[y][x] = True
+    return {"radiance": radiance, "brightness_temperature_k": temperature, "valid_mask": valid}
+
+
+def matrix_summary(matrix, valid_mask, unit):
+    values = [matrix[y][x] for y in range(WINDOW) for x in range(WINDOW) if valid_mask[y][x]]
+    return {"unit": unit, "count": len(values), "min": min(values) if values else None,
+            "max": max(values) if values else None, "mean": sum(values) / len(values) if values else None}
 
 
 def validate_asset_info(info):
