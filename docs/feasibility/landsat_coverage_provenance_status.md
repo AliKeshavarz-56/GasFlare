@@ -6,6 +6,8 @@
 
 ## 2026-11-15 discovery attempt status
 
+The separately authorized one-day trial stopped before count or metadata because the runner constructed an Earth Engine geometry before initialization. No count or metadata response was received, and expanded discovery remains incomplete. The runner is being corrected and tested offline only; this note does not authorize another online attempt.
+
 Saved count-only client output reports LC08 T1 310 (310 day), LC08 T2 56 (10 day, 46 night), LC09 T1 311 (311 day), and LC09 T2 52 (8 day, 44 night). Their arithmetic reconciles to 729 total, 639 day, 90 night, Tier 1 621, and Tier 2 108. This is a saved client result, not a retained raw server response; treat all aggregate counts as unverified. Previously published 967, 637, and 346 are unverified: 967 equals 621+346 and appears to mix subtotals; 346 conflicts with saved Tier 2 (56+52=108), with exact origin unknown; 637 conflicts with saved day total 639, with exact origin unknown.
 
 The partitioned run's exact timeout stage is unknown: only its registered query remains, with no response, error trace, or stage log. In code, each collection × month × solar-sign unit had its own `size().getInfo()` request and, when nonempty, a separate metadata `getInfo()` request; these were independent requests, not one combined request. Which call (or other stage) timed out is unknown, and no network/server cause is established. No new online request was made for this review.
