@@ -64,9 +64,22 @@ class AcquisitionTests(unittest.TestCase):
         summary = mod.summarize_counts(counts)
         self.assertEqual((summary["total"], summary["tier1"], summary["tier2"]), (729, 621, 108))
         self.assertEqual((summary["day"], summary["night"]), (639, 90))
+        self.assertEqual([counts[c]["total"] for c in mod.COLLECTIONS], [310, 56, 311, 52])
+        self.assertEqual(sum(counts[c]["total"] for c in mod.COLLECTIONS), 729)
         self.assertEqual(summary["day"] + summary["night"] + summary["zero"] + summary["missing_or_null"], summary["total"])
         self.assertEqual(summary["tier1"] + summary["tier2"], summary["total"])
         counts["LANDSAT/LC08/C02/T2"]["day"] += 1
+        with self.assertRaisesRegex(ValueError, "partition counts"):
+            mod.summarize_counts(counts)
+
+    def test_inconsistent_collection_total_is_rejected(self):
+        counts = {
+            "LANDSAT/LC08/C02/T1": {"total": 310, "day": 310, "night": 0, "zero": 0, "missing_or_null": 0},
+            "LANDSAT/LC08/C02/T2": {"total": 56, "day": 10, "night": 46, "zero": 0, "missing_or_null": 0},
+            "LANDSAT/LC09/C02/T1": {"total": 311, "day": 311, "night": 0, "zero": 0, "missing_or_null": 0},
+            "LANDSAT/LC09/C02/T2": {"total": 52, "day": 8, "night": 44, "zero": 0, "missing_or_null": 0},
+        }
+        counts["LANDSAT/LC09/C02/T2"]["total"] = 51
         with self.assertRaisesRegex(ValueError, "partition counts"):
             mod.summarize_counts(counts)
 

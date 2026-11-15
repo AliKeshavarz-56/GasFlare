@@ -28,7 +28,7 @@ def summarize_counts(counts):
               for collection in COLLECTIONS}
     if any(totals[c] != counts[c]["total"] for c in COLLECTIONS):
         raise ValueError("Per-collection partition counts do not match total")
-    return {
+    summary = {
         "total": sum(totals.values()),
         "day": sum(counts[c]["day"] for c in COLLECTIONS),
         "night": sum(counts[c]["night"] for c in COLLECTIONS),
@@ -37,6 +37,12 @@ def summarize_counts(counts):
         "tier1": totals[COLLECTIONS[0]] + totals[COLLECTIONS[2]],
         "tier2": totals[COLLECTIONS[1]] + totals[COLLECTIONS[3]],
     }
+    if (summary["day"] + summary["night"] + summary["zero"] + summary["missing_or_null"]
+            != summary["total"]):
+        raise ValueError("Solar partition counts do not match total")
+    if summary["tier1"] + summary["tier2"] != summary["total"]:
+        raise ValueError("Tier counts do not match total")
+    return summary
 
 
 def make_units(start=START, end=END, span_days=14):
